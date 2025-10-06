@@ -58,7 +58,7 @@ function readFile(file) {
     });
 }
 
-// Parse CSV text to array of objects - FIXED: Proper CSV parsing with quoted fields
+// Parse CSV text to array of objects - FIXED: Handles commas in quoted fields
 function parseCSV(csvText) {
     const lines = csvText.split('\n').filter(line => line.trim() !== '');
     if (lines.length === 0) return [];
@@ -66,69 +66,46 @@ function parseCSV(csvText) {
     // Parse headers
     const headers = parseCSVLine(lines[0]);
     
-    const result = [];
-    for (let i = 1; i < lines.length; i++) {
-        const values = parseCSVLine(lines[i]);
-        // Skip if row doesn't match header length (incomplete data)
-        if (values.length !== headers.length) continue;
-        
+    return lines.slice(1).map(line => {
+        const values = parseCSVLine(line);
         const obj = {};
-        headers.forEach((header, j) => {
-            let value = values[j];
-            // Handle missing values
-            if (value === '' || value === null || value === undefined) {
-                obj[header] = null;
-            } else {
-                // Convert to number if possible
-                const numValue = parseFloat(value);
-                obj[header] = isNaN(numValue) ? value : numValue;
+        headers.forEach((header, i) => {
+            // Handle missing values (empty strings)
+            let value = i < values.length ? values[i] : '';
+            obj[header] = value === '' ? null : value;
+            
+            // Convert numerical values to numbers if possible
+            if (!isNaN(obj[header]) && obj[header] !== null && obj[header] !== '') {
+                obj[header] = parseFloat(obj[header]);
             }
         });
-        result.push(obj);
-    }
-    
-    return result;
+        return obj;
+    });
 }
 
-// Parse a single CSV line, handling quoted fields with commas - FIXED: Comma escape issue
+// Parse a single CSV line, handling quoted fields with commas
 function parseCSVLine(line) {
     const result = [];
-    let current = '';
     let inQuotes = false;
-    let quoteChar = '"';
+    let currentField = '';
     
     for (let i = 0; i < line.length; i++) {
         const char = line[i];
         
-        if (char === quoteChar) {
-            if (inQuotes && line[i + 1] === quoteChar) {
-                // Escaped quote inside quotes
-                current += quoteChar;
-                i++; // Skip next quote
-            } else {
-                // Toggle quote state
-                inQuotes = !inQuotes;
-            }
+        if (char === '"') {
+            inQuotes = !inQuotes;
         } else if (char === ',' && !inQuotes) {
-            // End of field
-            result.push(current);
-            current = '';
+            result.push(currentField.trim());
+            currentField = '';
         } else {
-            current += char;
+            currentField += char;
         }
     }
     
     // Add the last field
-    result.push(current);
+    result.push(currentField.trim());
     
-    // Remove surrounding quotes and trim
-    return result.map(field => {
-        let trimmed = field.trim();
-        if (trimmed.startsWith(quoteChar) && trimmed.endsWith(quoteChar)) {
-            trimmed = trimmed.slice(1, -1);
-        }
-        return trimmed.replace(/""/g, '"'); // Replace double quotes with single
-    });
+    return result;
 }
 
 // Inspect the loaded data
@@ -155,9 +132,7 @@ function inspectData() {
     // Calculate missing values percentage for each feature
     let missingInfo = '<h4>Missing Values Percentage:</h4><ul>';
     Object.keys(trainData[0]).forEach(feature => {
-        const missingCount = trainData.filter(row => 
-            row[feature] === null || row[feature] === undefined || row[feature] === ''
-        ).length;
+        const missingCount = trainData.filter(row => row[feature] === null || row[feature] === undefined || row[feature] === '').length;
         const missingPercent = (missingCount / trainData.length * 100).toFixed(2);
         missingInfo += `<li>${feature}: ${missingPercent}%</li>`;
     });
@@ -175,18 +150,12 @@ function inspectData() {
 // Create a preview table from data
 function createPreviewTable(data) {
     const table = document.createElement('table');
-    table.style.borderCollapse = 'collapse';
-    table.style.width = '100%';
-    table.style.border = '1px solid #ddd';
     
     // Create header row
     const headerRow = document.createElement('tr');
     Object.keys(data[0]).forEach(key => {
         const th = document.createElement('th');
         th.textContent = key;
-        th.style.border = '1px solid #ddd';
-        th.style.padding = '8px';
-        th.style.backgroundColor = '#f2f2f2';
         headerRow.appendChild(th);
     });
     table.appendChild(headerRow);
@@ -197,8 +166,6 @@ function createPreviewTable(data) {
         Object.values(row).forEach(value => {
             const td = document.createElement('td');
             td.textContent = value !== null ? value : 'NULL';
-            td.style.border = '1px solid #ddd';
-            td.style.padding = '8px';
             tr.appendChild(td);
         });
         table.appendChild(tr);
@@ -212,72 +179,57 @@ function createVisualizations() {
     const chartsDiv = document.getElementById('charts');
     chartsDiv.innerHTML = '<h3>Data Visualizations</h3>';
     
-    // Check if we have the required data
-    if (!trainData || trainData.length === 0) {
-        chartsDiv.innerHTML += '<p>No data available for visualization.</p>';
-        return;
-    }
+    // Survival by Sex
+    const survivalBySex = {};
+    trainData.forEach(row => {
+        if (row.Sex && row.Survived !== undefined) {
+            if (!survivalBySex[row.Sex]) {
+                survivalBySex[row.Sex] = { survived: 0, total: 0 };
+            }
+            survivalBySex[row.Sex].total++;
+            if (row.Survived === 1) {
+                survivalBySex[row.Sex].survived++;
+            }
+        }
+    });
     
-    try {
-        // Survival by Sex
-        const survivalBySex = {};
-        trainData.forEach(row => {
-            if (row.Sex && row.Survived !== undefined && row.Survived !== null) {
-                if (!survivalBySex[row.Sex]) {
-                    survivalBySex[row.Sex] = { survived: 0, total: 0 };
-                }
-                survivalBySex[row.Sex].total++;
-                if (row.Survived === 1) {
-                    survivalBySex[row.Sex].survived++;
-                }
+    const sexData = Object.entries(survivalBySex).map(([sex, stats]) => ({
+        sex,
+        survivalRate: (stats.survived / stats.total) * 100
+    }));
+    
+    tfvis.render.barchart(
+        { name: 'Survival Rate by Sex', tab: 'Charts' },
+        sexData.map(d => ({ x: d.sex, y: d.survivalRate })),
+        { xLabel: 'Sex', yLabel: 'Survival Rate (%)' }
+    );
+    
+    // Survival by Pclass
+    const survivalByPclass = {};
+    trainData.forEach(row => {
+        if (row.Pclass !== undefined && row.Survived !== undefined) {
+            if (!survivalByPclass[row.Pclass]) {
+                survivalByPclass[row.Pclass] = { survived: 0, total: 0 };
             }
-        });
-        
-        const sexData = Object.entries(survivalBySex).map(([sex, stats]) => ({
-            sex,
-            survivalRate: (stats.survived / stats.total) * 100
-        }));
-        
-        if (sexData.length > 0) {
-            tfvis.render.barchart(
-                { name: 'Survival Rate by Sex', tab: 'Charts' },
-                sexData.map(d => ({ x: d.sex, y: d.survivalRate })),
-                { xLabel: 'Sex', yLabel: 'Survival Rate (%)' }
-            );
-        }
-        
-        // Survival by Pclass
-        const survivalByPclass = {};
-        trainData.forEach(row => {
-            if (row.Pclass !== undefined && row.Pclass !== null && row.Survived !== undefined && row.Survived !== null) {
-                if (!survivalByPclass[row.Pclass]) {
-                    survivalByPclass[row.Pclass] = { survived: 0, total: 0 };
-                }
-                survivalByPclass[row.Pclass].total++;
-                if (row.Survived === 1) {
-                    survivalByPclass[row.Pclass].survived++;
-                }
+            survivalByPclass[row.Pclass].total++;
+            if (row.Survived === 1) {
+                survivalByPclass[row.Pclass].survived++;
             }
-        });
-        
-        const pclassData = Object.entries(survivalByPclass).map(([pclass, stats]) => ({
-            pclass: `Class ${pclass}`,
-            survivalRate: (stats.survived / stats.total) * 100
-        }));
-        
-        if (pclassData.length > 0) {
-            tfvis.render.barchart(
-                { name: 'Survival Rate by Passenger Class', tab: 'Charts' },
-                pclassData.map(d => ({ x: d.pclass, y: d.survivalRate })),
-                { xLabel: 'Passenger Class', yLabel: 'Survival Rate (%)' }
-            );
         }
-        
-        chartsDiv.innerHTML += '<p>Charts are displayed in the tfjs-vis visor. Click the button in the bottom right to view.</p>';
-    } catch (error) {
-        console.error('Error creating visualizations:', error);
-        chartsDiv.innerHTML += '<p>Error creating visualizations. Check console for details.</p>';
-    }
+    });
+    
+    const pclassData = Object.entries(survivalByPclass).map(([pclass, stats]) => ({
+        pclass: `Class ${pclass}`,
+        survivalRate: (stats.survived / stats.total) * 100
+    }));
+    
+    tfvis.render.barchart(
+        { name: 'Survival Rate by Passenger Class', tab: 'Charts' },
+        pclassData.map(d => ({ x: d.pclass, y: d.survivalRate })),
+        { xLabel: 'Passenger Class', yLabel: 'Survival Rate (%)' }
+    );
+    
+    chartsDiv.innerHTML += '<p>Charts are displayed in the tfjs-vis visor. Click the button in the bottom right to view.</p>';
 }
 
 // Preprocess the data
@@ -292,15 +244,9 @@ function preprocessData() {
     
     try {
         // Calculate imputation values from training data
-        const ageValues = trainData.map(row => row.Age).filter(age => age !== null && !isNaN(age));
-        const fareValues = trainData.map(row => row.Fare).filter(fare => fare !== null && !isNaN(fare));
-        const embarkedValues = trainData.map(row => row.Embarked).filter(e => e !== null && e !== '');
-        
-        const ageMedian = calculateMedian(ageValues);
-        const fareMedian = calculateMedian(fareValues);
-        const embarkedMode = calculateMode(embarkedValues) || 'S'; // Default to 'S' if no mode found
-        
-        console.log('Imputation values:', { ageMedian, fareMedian, embarkedMode });
+        const ageMedian = calculateMedian(trainData.map(row => row.Age).filter(age => age !== null && !isNaN(age)));
+        const fareMedian = calculateMedian(trainData.map(row => row.Fare).filter(fare => fare !== null && !isNaN(fare)));
+        const embarkedMode = calculateMode(trainData.map(row => row.Embarked).filter(e => e !== null));
         
         // Preprocess training data
         preprocessedTrainData = {
@@ -335,14 +281,13 @@ function preprocessData() {
             <p>Training features shape: ${preprocessedTrainData.features.shape}</p>
             <p>Training labels shape: ${preprocessedTrainData.labels.shape}</p>
             <p>Test features shape: [${preprocessedTestData.features.length}, ${preprocessedTestData.features[0] ? preprocessedTestData.features[0].length : 0}]</p>
-            <p>Feature dimension: ${preprocessedTestData.features[0] ? preprocessedTestData.features[0].length : 0} features per sample</p>
         `;
         
         // Enable the create model button
         document.getElementById('create-model-btn').disabled = false;
     } catch (error) {
         outputDiv.innerHTML = `Error during preprocessing: ${error.message}`;
-        console.error('Preprocessing error:', error);
+        console.error(error);
     }
 }
 
@@ -351,21 +296,17 @@ function extractFeatures(row, ageMedian, fareMedian, embarkedMode) {
     // Impute missing values
     const age = (row.Age !== null && !isNaN(row.Age)) ? row.Age : ageMedian;
     const fare = (row.Fare !== null && !isNaN(row.Fare)) ? row.Fare : fareMedian;
-    const embarked = (row.Embarked !== null && row.Embarked !== '') ? row.Embarked : embarkedMode;
+    const embarked = row.Embarked !== null ? row.Embarked : embarkedMode;
     
-    // Get training data for standardization
+    // Standardize numerical features
     const ageValues = trainData.map(r => r.Age).filter(a => a !== null && !isNaN(a));
     const fareValues = trainData.map(r => r.Fare).filter(f => f !== null && !isNaN(f));
     
-    const ageStdDev = calculateStdDev(ageValues) || 1;
-    const fareStdDev = calculateStdDev(fareValues) || 1;
-    
-    // Standardize numerical features
-    const standardizedAge = (age - ageMedian) / ageStdDev;
-    const standardizedFare = (fare - fareMedian) / fareStdDev;
+    const standardizedAge = (age - ageMedian) / (calculateStdDev(ageValues) || 1);
+    const standardizedFare = (fare - fareMedian) / (calculateStdDev(fareValues) || 1);
     
     // One-hot encode categorical features
-    const pclassOneHot = oneHotEncode(row.Pclass, [1, 2, 3]);
+    const pclassOneHot = oneHotEncode(row.Pclass, [1, 2, 3]); // Pclass values: 1, 2, 3
     const sexOneHot = oneHotEncode(row.Sex, ['male', 'female']);
     const embarkedOneHot = oneHotEncode(embarked, ['C', 'Q', 'S']);
     
@@ -410,7 +351,7 @@ function calculateMode(values) {
     
     const frequency = {};
     let maxCount = 0;
-    let mode = values[0];
+    let mode = null;
     
     values.forEach(value => {
         frequency[value] = (frequency[value] || 0) + 1;
@@ -478,13 +419,13 @@ function createModel() {
     const summaryDiv = document.getElementById('model-summary');
     summaryDiv.innerHTML = '<h3>Model Summary</h3>';
     
+    // Simple summary since tfjs doesn't have a built-in summary function for the browser
     let summaryText = '<ul>';
     model.layers.forEach((layer, i) => {
         summaryText += `<li>Layer ${i+1}: ${layer.getClassName()} - Output Shape: ${JSON.stringify(layer.outputShape)}</li>`;
     });
     summaryText += '</ul>';
-    summaryText += `<p>Total parameters: ${model.countParams().toLocaleString()}</p>`;
-    summaryText += `<p>Input shape: [${inputShape}]</p>`;
+    summaryText += `<p>Total parameters: ${model.countParams()}</p>`;
     summaryDiv.innerHTML += summaryText;
     
     // Enable the train button
@@ -515,22 +456,31 @@ async function trainModel() {
         validationData = valFeatures;
         validationLabels = valLabels;
         
-        console.log('Training set:', trainFeatures.shape);
-        console.log('Validation set:', valFeatures.shape);
+        // Create callbacks for training visualization
+        const fitCallbacks = tfvis.show.fitCallbacks(
+            { name: 'Training Performance' },
+            ['loss', 'acc', 'val_loss', 'val_acc'],
+            { callbacks: ['onEpochEnd'] }
+        );
         
-        // Train the model - FIXED: Callback issue
+        // Train the model
         trainingHistory = await model.fit(trainFeatures, trainLabels, {
             epochs: 50,
             batchSize: 32,
             validationData: [valFeatures, valLabels],
-            callbacks: tfvis.show.fitCallbacks(
-                { name: 'Training Performance' },
-                ['loss', 'acc', 'val_loss', 'val_acc']
-            ),
-            verbose: 0
+            callbacks: {
+                onEpochEnd: (epoch, logs) => {
+                    statusDiv.innerHTML = `Epoch ${epoch + 1}/50 - loss: ${logs.loss.toFixed(4)}, acc: ${logs.acc.toFixed(4)}, val_loss: ${logs.val_loss.toFixed(4)}, val_acc: ${logs.val_acc.toFixed(4)}`;
+                    
+                    // Also call the tfvis callback
+                    if (fitCallbacks && fitCallbacks.onEpochEnd) {
+                        fitCallbacks.onEpochEnd(epoch, logs);
+                    }
+                }
+            }
         });
         
-        statusDiv.innerHTML = 'Training completed!';
+        statusDiv.innerHTML += '<p>Training completed!</p>';
         
         // Make predictions on validation set for evaluation
         validationPredictions = model.predict(validationData);
@@ -546,132 +496,118 @@ async function trainModel() {
         updateMetrics();
     } catch (error) {
         statusDiv.innerHTML = `Error during training: ${error.message}`;
-        console.error('Training error:', error);
+        console.error(error);
     }
 }
 
-// Update metrics based on threshold - FIXED: Evaluation table display
+// Update metrics based on threshold
 async function updateMetrics() {
     if (!validationPredictions || !validationLabels) return;
     
     const threshold = parseFloat(document.getElementById('threshold-slider').value);
     document.getElementById('threshold-value').textContent = threshold.toFixed(2);
     
-    try {
-        // Get predictions as array - FIXED: Use array() instead of arraySync()
-        const predVals = await validationPredictions.array();
-        const trueVals = await validationLabels.array();
+    // Get predictions as array
+    const predVals = await validationPredictions.array();
+    const trueVals = await validationLabels.array();
+    
+    let tp = 0, tn = 0, fp = 0, fn = 0;
+    
+    for (let i = 0; i < predVals.length; i++) {
+        const prediction = predVals[i] >= threshold ? 1 : 0;
+        const actual = trueVals[i];
         
-        let tp = 0, tn = 0, fp = 0, fn = 0;
-        
-        for (let i = 0; i < predVals.length; i++) {
-            const prediction = predVals[i] >= threshold ? 1 : 0;
-            const actual = trueVals[i];
-            
-            if (prediction === 1 && actual === 1) tp++;
-            else if (prediction === 0 && actual === 0) tn++;
-            else if (prediction === 1 && actual === 0) fp++;
-            else if (prediction === 0 && actual === 1) fn++;
-        }
-        
-        // Update confusion matrix display - FIXED: Proper table structure with styling
-        const cmDiv = document.getElementById('confusion-matrix');
-        cmDiv.innerHTML = `
-            <table style="border-collapse: collapse; width: 100%; margin: 10px 0;">
-                <tr>
-                    <th style="border: 1px solid #ddd; padding: 8px; background-color: #f2f2f2;"></th>
-                    <th style="border: 1px solid #ddd; padding: 8px; background-color: #f2f2f2;">Predicted Positive</th>
-                    <th style="border: 1px solid #ddd; padding: 8px; background-color: #f2f2f2;">Predicted Negative</th>
-                </tr>
-                <tr>
-                    <th style="border: 1px solid #ddd; padding: 8px; background-color: #f2f2f2;">Actual Positive</th>
-                    <td style="border: 1px solid #ddd; padding: 8px; background-color: #d4edda; text-align: center; font-weight: bold;">${tp}</td>
-                    <td style="border: 1px solid #ddd; padding: 8px; background-color: #f8d7da; text-align: center; font-weight: bold;">${fn}</td>
-                </tr>
-                <tr>
-                    <th style="border: 1px solid #ddd; padding: 8px; background-color: #f2f2f2;">Actual Negative</th>
-                    <td style="border: 1px solid #ddd; padding: 8px; background-color: #f8d7da; text-align: center; font-weight: bold;">${fp}</td>
-                    <td style="border: 1px solid #ddd; padding: 8px; background-color: #d4edda; text-align: center; font-weight: bold;">${tn}</td>
-                </tr>
-            </table>
-        `;
-        
-        // Calculate performance metrics
-        const precision = tp / (tp + fp) || 0;
-        const recall = tp / (tp + fn) || 0;
-        const f1 = 2 * (precision * recall) / (precision + recall) || 0;
-        const accuracy = (tp + tn) / (tp + tn + fp + fn) || 0;
-        
-        // Update performance metrics display
-        const metricsDiv = document.getElementById('performance-metrics');
-        metricsDiv.innerHTML = `
-            <p><strong>Accuracy:</strong> ${(accuracy * 100).toFixed(2)}%</p>
-            <p><strong>Precision:</strong> ${precision.toFixed(4)}</p>
-            <p><strong>Recall:</strong> ${recall.toFixed(4)}</p>
-            <p><strong>F1 Score:</strong> ${f1.toFixed(4)}</p>
-        `;
-        
-        // Calculate and plot ROC curve
-        await plotROC(trueVals, predVals);
-    } catch (error) {
-        console.error('Error updating metrics:', error);
+        if (prediction === 1 && actual === 1) tp++;
+        else if (prediction === 0 && actual === 0) tn++;
+        else if (prediction === 1 && actual === 0) fp++;
+        else if (prediction === 0 && actual === 1) fn++;
     }
+    
+    // Update confusion matrix display - FIXED: Proper table structure
+    const cmDiv = document.getElementById('confusion-matrix');
+    cmDiv.innerHTML = `
+        <table>
+            <tr><th></th><th>Predicted Positive</th><th>Predicted Negative</th></tr>
+            <tr><th>Actual Positive</th><td class="tp">${tp}</td><td class="fn">${fn}</td></tr>
+            <tr><th>Actual Negative</th><td class="fp">${fp}</td><td class="tn">${tn}</td></tr>
+        </table>
+        <style>
+            .tp { background-color: #d4edda; }
+            .tn { background-color: #d4edda; }
+            .fp { background-color: #f8d7da; }
+            .fn { background-color: #f8d7da; }
+        </style>
+    `;
+    
+    // Calculate performance metrics
+    const precision = tp / (tp + fp) || 0;
+    const recall = tp / (tp + fn) || 0;
+    const f1 = 2 * (precision * recall) / (precision + recall) || 0;
+    const accuracy = (tp + tn) / (tp + tn + fp + fn) || 0;
+    
+    // Update performance metrics display
+    const metricsDiv = document.getElementById('performance-metrics');
+    metricsDiv.innerHTML = `
+        <p>Accuracy: ${(accuracy * 100).toFixed(2)}%</p>
+        <p>Precision: ${precision.toFixed(4)}</p>
+        <p>Recall: ${recall.toFixed(4)}</p>
+        <p>F1 Score: ${f1.toFixed(4)}</p>
+    `;
+    
+    // Calculate and plot ROC curve
+    await plotROC(trueVals, predVals);
 }
 
 // Plot ROC curve
 async function plotROC(trueLabels, predictions) {
-    try {
-        // Calculate TPR and FPR for different thresholds
-        const thresholds = Array.from({ length: 101 }, (_, i) => i / 100);
-        const rocData = [];
+    // Calculate TPR and FPR for different thresholds
+    const thresholds = Array.from({ length: 100 }, (_, i) => i / 100);
+    const rocData = [];
+    
+    thresholds.forEach(threshold => {
+        let tp = 0, fn = 0, fp = 0, tn = 0;
         
-        thresholds.forEach(threshold => {
-            let tp = 0, fn = 0, fp = 0, tn = 0;
+        for (let i = 0; i < predictions.length; i++) {
+            const prediction = predictions[i] >= threshold ? 1 : 0;
+            const actual = trueLabels[i];
             
-            for (let i = 0; i < predictions.length; i++) {
-                const prediction = predictions[i] >= threshold ? 1 : 0;
-                const actual = trueLabels[i];
-                
-                if (actual === 1) {
-                    if (prediction === 1) tp++;
-                    else fn++;
-                } else {
-                    if (prediction === 1) fp++;
-                    else tn++;
-                }
+            if (actual === 1) {
+                if (prediction === 1) tp++;
+                else fn++;
+            } else {
+                if (prediction === 1) fp++;
+                else tn++;
             }
-            
-            const tpr = tp / (tp + fn) || 0;
-            const fpr = fp / (fp + tn) || 0;
-            
-            rocData.push({ threshold, fpr, tpr });
-        });
-        
-        // Calculate AUC (approximate using trapezoidal rule)
-        let auc = 0;
-        for (let i = 1; i < rocData.length; i++) {
-            auc += (rocData[i].fpr - rocData[i-1].fpr) * (rocData[i].tpr + rocData[i-1].tpr) / 2;
         }
         
-        // Plot ROC curve
-        tfvis.render.linechart(
-            { name: 'ROC Curve', tab: 'Evaluation' },
-            { values: rocData.map(d => ({ x: d.fpr, y: d.tpr })) },
-            { 
-                xLabel: 'False Positive Rate', 
-                yLabel: 'True Positive Rate',
-                series: ['ROC Curve'],
-                width: 400,
-                height: 400
-            }
-        );
+        const tpr = tp / (tp + fn) || 0;
+        const fpr = fp / (fp + tn) || 0;
         
-        // Add AUC to performance metrics
-        const metricsDiv = document.getElementById('performance-metrics');
-        metricsDiv.innerHTML += `<p><strong>AUC:</strong> ${auc.toFixed(4)}</p>`;
-    } catch (error) {
-        console.error('Error plotting ROC curve:', error);
+        rocData.push({ threshold, fpr, tpr });
+    });
+    
+    // Calculate AUC (approximate using trapezoidal rule)
+    let auc = 0;
+    for (let i = 1; i < rocData.length; i++) {
+        auc += (rocData[i].fpr - rocData[i-1].fpr) * (rocData[i].tpr + rocData[i-1].tpr) / 2;
     }
+    
+    // Plot ROC curve
+    tfvis.render.linechart(
+        { name: 'ROC Curve', tab: 'Evaluation' },
+        { values: rocData.map(d => ({ x: d.fpr, y: d.tpr })) },
+        { 
+            xLabel: 'False Positive Rate', 
+            yLabel: 'True Positive Rate',
+            series: ['ROC Curve'],
+            width: 400,
+            height: 400
+        }
+    );
+    
+    // Add AUC to performance metrics
+    const metricsDiv = document.getElementById('performance-metrics');
+    metricsDiv.innerHTML += `<p>AUC: ${auc.toFixed(4)}</p>`;
 }
 
 // Predict on test data
@@ -704,31 +640,24 @@ async function predict() {
         outputDiv.appendChild(createPredictionTable(results.slice(0, 10)));
         
         outputDiv.innerHTML += `<p>Predictions completed! Total: ${results.length} samples</p>`;
-        outputDiv.innerHTML += `<p>Survival predictions: ${results.filter(r => r.Survived === 1).length} survived, ${results.filter(r => r.Survived === 0).length} did not survive</p>`;
         
         // Enable the export button
         document.getElementById('export-btn').disabled = false;
     } catch (error) {
         outputDiv.innerHTML = `Error during prediction: ${error.message}`;
-        console.error('Prediction error:', error);
+        console.error(error);
     }
 }
 
 // Create prediction table
 function createPredictionTable(data) {
     const table = document.createElement('table');
-    table.style.borderCollapse = 'collapse';
-    table.style.width = '100%';
-    table.style.border = '1px solid #ddd';
     
     // Create header row
     const headerRow = document.createElement('tr');
     ['PassengerId', 'Survived', 'Probability'].forEach(header => {
         const th = document.createElement('th');
         th.textContent = header;
-        th.style.border = '1px solid #ddd';
-        th.style.padding = '8px';
-        th.style.backgroundColor = '#f2f2f2';
         headerRow.appendChild(th);
     });
     table.appendChild(headerRow);
@@ -738,20 +667,7 @@ function createPredictionTable(data) {
         const tr = document.createElement('tr');
         ['PassengerId', 'Survived', 'Probability'].forEach(key => {
             const td = document.createElement('td');
-            let value = row[key];
-            if (key === 'Probability') {
-                value = value.toFixed(4);
-                // Color code based on survival probability
-                if (value >= 0.5) {
-                    td.style.backgroundColor = '#d4edda';
-                } else {
-                    td.style.backgroundColor = '#f8d7da';
-                }
-            }
-            td.textContent = value;
-            td.style.border = '1px solid #ddd';
-            td.style.padding = '8px';
-            td.style.textAlign = 'center';
+            td.textContent = key === 'Probability' ? row[key].toFixed(4) : row[key];
             tr.appendChild(td);
         });
         table.appendChild(tr);
@@ -771,7 +687,7 @@ async function exportResults() {
     statusDiv.innerHTML = 'Exporting results...';
     
     try {
-        // Get predictions - FIXED: Use array() instead of arraySync()
+        // Get predictions
         const predValues = await testPredictions.array();
         
         // Create submission CSV (PassengerId, Survived)
@@ -790,40 +706,26 @@ async function exportResults() {
         const submissionLink = document.createElement('a');
         submissionLink.href = URL.createObjectURL(new Blob([submissionCSV], { type: 'text/csv' }));
         submissionLink.download = 'submission.csv';
-        submissionLink.textContent = 'Download Submission CSV';
-        submissionLink.style.display = 'block';
-        submissionLink.style.margin = '10px 0';
-        submissionLink.style.padding = '10px';
-        submissionLink.style.backgroundColor = '#1a73e8';
-        submissionLink.style.color = 'white';
-        submissionLink.style.textDecoration = 'none';
-        submissionLink.style.borderRadius = '4px';
-        submissionLink.style.textAlign = 'center';
         
         const probabilitiesLink = document.createElement('a');
         probabilitiesLink.href = URL.createObjectURL(new Blob([probabilitiesCSV], { type: 'text/csv' }));
         probabilitiesLink.download = 'probabilities.csv';
-        probabilitiesLink.textContent = 'Download Probabilities CSV';
-        probabilitiesLink.style.display = 'block';
-        probabilitiesLink.style.margin = '10px 0';
-        probabilitiesLink.style.padding = '10px';
-        probabilitiesLink.style.backgroundColor = '#1a73e8';
-        probabilitiesLink.style.color = 'white';
-        probabilitiesLink.style.textDecoration = 'none';
-        probabilitiesLink.style.borderRadius = '4px';
-        probabilitiesLink.style.textAlign = 'center';
         
-        // Clear and add download links
-        statusDiv.innerHTML = '<p>Export completed! Click the links below to download:</p>';
-        statusDiv.appendChild(submissionLink);
-        statusDiv.appendChild(probabilitiesLink);
+        // Trigger downloads
+        submissionLink.click();
+        probabilitiesLink.click();
         
         // Save model
-        await model.save('downloads://titanic-model');
-        statusDiv.innerHTML += '<p>Model saved to browser downloads</p>';
+        await model.save('downloads://titanic-tfjs-model');
         
+        statusDiv.innerHTML = `
+            <p>Export completed!</p>
+            <p>Downloaded: submission.csv (Kaggle submission format)</p>
+            <p>Downloaded: probabilities.csv (Prediction probabilities)</p>
+            <p>Model saved to browser downloads</p>
+        `;
     } catch (error) {
         statusDiv.innerHTML = `Error during export: ${error.message}`;
-        console.error('Export error:', error);
+        console.error(error);
     }
 }
