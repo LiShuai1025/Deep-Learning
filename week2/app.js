@@ -58,25 +58,54 @@ function readFile(file) {
     });
 }
 
-// Parse CSV text to array of objects
+// Parse CSV text to array of objects - FIXED: Handles commas in quoted fields
 function parseCSV(csvText) {
     const lines = csvText.split('\n').filter(line => line.trim() !== '');
-    const headers = lines[0].split(',').map(header => header.trim());
+    if (lines.length === 0) return [];
+    
+    // Parse headers
+    const headers = parseCSVLine(lines[0]);
     
     return lines.slice(1).map(line => {
-        const values = line.split(',').map(value => value.trim());
+        const values = parseCSVLine(line);
         const obj = {};
         headers.forEach((header, i) => {
             // Handle missing values (empty strings)
-            obj[header] = values[i] === '' ? null : values[i];
+            let value = i < values.length ? values[i] : '';
+            obj[header] = value === '' ? null : value;
             
             // Convert numerical values to numbers if possible
-            if (!isNaN(obj[header]) && obj[header] !== null) {
+            if (!isNaN(obj[header]) && obj[header] !== null && obj[header] !== '') {
                 obj[header] = parseFloat(obj[header]);
             }
         });
         return obj;
     });
+}
+
+// Parse a single CSV line, handling quoted fields with commas
+function parseCSVLine(line) {
+    const result = [];
+    let inQuotes = false;
+    let currentField = '';
+    
+    for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        
+        if (char === '"') {
+            inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+            result.push(currentField.trim());
+            currentField = '';
+        } else {
+            currentField += char;
+        }
+    }
+    
+    // Add the last field
+    result.push(currentField.trim());
+    
+    return result;
 }
 
 // Inspect the loaded data
@@ -103,7 +132,7 @@ function inspectData() {
     // Calculate missing values percentage for each feature
     let missingInfo = '<h4>Missing Values Percentage:</h4><ul>';
     Object.keys(trainData[0]).forEach(feature => {
-        const missingCount = trainData.filter(row => row[feature] === null || row[feature] === undefined).length;
+        const missingCount = trainData.filter(row => row[feature] === null || row[feature] === undefined || row[feature] === '').length;
         const missingPercent = (missingCount / trainData.length * 100).toFixed(2);
         missingInfo += `<li>${feature}: ${missingPercent}%</li>`;
     });
@@ -215,8 +244,8 @@ function preprocessData() {
     
     try {
         // Calculate imputation values from training data
-        const ageMedian = calculateMedian(trainData.map(row => row.Age).filter(age => age !== null));
-        const fareMedian = calculateMedian(trainData.map(row => row.Fare).filter(fare => fare !== null));
+        const ageMedian = calculateMedian(trainData.map(row => row.Age).filter(age => age !== null && !isNaN(age)));
+        const fareMedian = calculateMedian(trainData.map(row => row.Fare).filter(fare => fare !== null && !isNaN(fare)));
         const embarkedMode = calculateMode(trainData.map(row => row.Embarked).filter(e => e !== null));
         
         // Preprocess training data
@@ -265,13 +294,16 @@ function preprocessData() {
 // Extract features from a row with imputation and normalization
 function extractFeatures(row, ageMedian, fareMedian, embarkedMode) {
     // Impute missing values
-    const age = row.Age !== null ? row.Age : ageMedian;
-    const fare = row.Fare !== null ? row.Fare : fareMedian;
+    const age = (row.Age !== null && !isNaN(row.Age)) ? row.Age : ageMedian;
+    const fare = (row.Fare !== null && !isNaN(row.Fare)) ? row.Fare : fareMedian;
     const embarked = row.Embarked !== null ? row.Embarked : embarkedMode;
     
     // Standardize numerical features
-    const standardizedAge = (age - ageMedian) / (calculateStdDev(trainData.map(r => r.Age).filter(a => a !== null)) || 1);
-    const standardizedFare = (fare - fareMedian) / (calculateStdDev(trainData.map(r => r.Fare).filter(f => f !== null)) || 1);
+    const ageValues = trainData.map(r => r.Age).filter(a => a !== null && !isNaN(a));
+    const fareValues = trainData.map(r => r.Fare).filter(f => f !== null && !isNaN(f));
+    
+    const standardizedAge = (age - ageMedian) / (calculateStdDev(ageValues) || 1);
+    const standardizedFare = (fare - fareMedian) / (calculateStdDev(fareValues) || 1);
     
     // One-hot encode categorical features
     const pclassOneHot = oneHotEncode(row.Pclass, [1, 2, 3]); // Pclass values: 1, 2, 3
@@ -303,14 +335,14 @@ function extractFeatures(row, ageMedian, fareMedian, embarkedMode) {
 function calculateMedian(values) {
     if (values.length === 0) return 0;
     
-    values.sort((a, b) => a - b);
-    const half = Math.floor(values.length / 2);
+    const sortedValues = [...values].sort((a, b) => a - b);
+    const half = Math.floor(sortedValues.length / 2);
     
-    if (values.length % 2 === 0) {
-        return (values[half - 1] + values[half]) / 2;
+    if (sortedValues.length % 2 === 0) {
+        return (sortedValues[half - 1] + sortedValues[half]) / 2;
     }
     
-    return values[half];
+    return sortedValues[half];
 }
 
 // Calculate mode of an array
@@ -424,19 +456,26 @@ async function trainModel() {
         validationData = valFeatures;
         validationLabels = valLabels;
         
+        // Create callbacks for training visualization
+        const fitCallbacks = tfvis.show.fitCallbacks(
+            { name: 'Training Performance' },
+            ['loss', 'acc', 'val_loss', 'val_acc'],
+            { callbacks: ['onEpochEnd'] }
+        );
+        
         // Train the model
         trainingHistory = await model.fit(trainFeatures, trainLabels, {
             epochs: 50,
             batchSize: 32,
             validationData: [valFeatures, valLabels],
-            callbacks: tfvis.show.fitCallbacks(
-                { name: 'Training Performance' },
-                ['loss', 'acc', 'val_loss', 'val_acc'],
-                { callbacks: ['onEpochEnd'] }
-            ),
             callbacks: {
                 onEpochEnd: (epoch, logs) => {
                     statusDiv.innerHTML = `Epoch ${epoch + 1}/50 - loss: ${logs.loss.toFixed(4)}, acc: ${logs.acc.toFixed(4)}, val_loss: ${logs.val_loss.toFixed(4)}, val_acc: ${logs.val_acc.toFixed(4)}`;
+                    
+                    // Also call the tfvis callback
+                    if (fitCallbacks && fitCallbacks.onEpochEnd) {
+                        fitCallbacks.onEpochEnd(epoch, logs);
+                    }
                 }
             }
         });
@@ -453,7 +492,7 @@ async function trainModel() {
         // Enable the predict button
         document.getElementById('predict-btn').disabled = false;
         
-        // Calculate initial metrics
+        // Calculate initial metrics - FIXED: Call updateMetrics to show evaluation table
         updateMetrics();
     } catch (error) {
         statusDiv.innerHTML = `Error during training: ${error.message}`;
@@ -468,9 +507,9 @@ async function updateMetrics() {
     const threshold = parseFloat(document.getElementById('threshold-slider').value);
     document.getElementById('threshold-value').textContent = threshold.toFixed(2);
     
-    // Calculate confusion matrix
-    const predVals = validationPredictions.arraySync();
-    const trueVals = validationLabels.arraySync();
+    // Get predictions as array
+    const predVals = await validationPredictions.array();
+    const trueVals = await validationLabels.array();
     
     let tp = 0, tn = 0, fp = 0, fn = 0;
     
@@ -484,14 +523,20 @@ async function updateMetrics() {
         else if (prediction === 0 && actual === 1) fn++;
     }
     
-    // Update confusion matrix display
+    // Update confusion matrix display - FIXED: Proper table structure
     const cmDiv = document.getElementById('confusion-matrix');
     cmDiv.innerHTML = `
         <table>
             <tr><th></th><th>Predicted Positive</th><th>Predicted Negative</th></tr>
-            <tr><th>Actual Positive</th><td>${tp}</td><td>${fn}</td></tr>
-            <tr><th>Actual Negative</th><td>${fp}</td><td>${tn}</td></tr>
+            <tr><th>Actual Positive</th><td class="tp">${tp}</td><td class="fn">${fn}</td></tr>
+            <tr><th>Actual Negative</th><td class="fp">${fp}</td><td class="tn">${tn}</td></tr>
         </table>
+        <style>
+            .tp { background-color: #d4edda; }
+            .tn { background-color: #d4edda; }
+            .fp { background-color: #f8d7da; }
+            .fn { background-color: #f8d7da; }
+        </style>
     `;
     
     // Calculate performance metrics
@@ -581,7 +626,7 @@ async function predict() {
         
         // Make predictions
         testPredictions = model.predict(testFeatures);
-        const predValues = testPredictions.arraySync();
+        const predValues = await testPredictions.array();
         
         // Create prediction results
         const results = preprocessedTestData.passengerIds.map((id, i) => ({
@@ -643,7 +688,7 @@ async function exportResults() {
     
     try {
         // Get predictions
-        const predValues = testPredictions.arraySync();
+        const predValues = await testPredictions.array();
         
         // Create submission CSV (PassengerId, Survived)
         let submissionCSV = 'PassengerId,Survived\n';
