@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Prediction Demo</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.3.0/dist/chart.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .upload-section, .training-section, .results-section { margin: 20px 0; padding: 20px; border: 1px solid #ddd; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        .progress { margin: 10px 0; }
+        .charts { display: flex; flex-wrap: wrap; gap: 20px; }
+        .chart-container { width: 600px; height: 400px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Stock Prediction Demo</h1>
+        
+        <div class="upload-section">
+            <h2>1. Upload CSV File</h2>
+            <input type="file" id="csvFile" accept=".csv">
+            <button id="loadData">Load Data</button>
+            <div id="fileInfo"></div>
+        </div>
+
+        <div class="training-section">
+            <h2>2. Train Model</h2>
+            <button id="trainModel" disabled>Start Training</button>
+            <div class="progress">
+                <div id="trainingProgress">Epoch: 0/0 - Loss: --</div>
+            </div>
+        </div>
+
+        <div class="results-section">
+            <h2>3. Results</h2>
+            <button id="evaluateModel" disabled>Evaluate Model</button>
+            <div id="accuracyResults"></div>
+            <div class="charts">
+                <div class="chart-container">
+                    <canvas id="accuracyChart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <canvas id="timelineChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="data-loader.js"></script>
+    <script type="module" src="gru.js"></script>
+    <script type="module" src="app.js"></script>
+</body>
+</html>
