@@ -1,2 +1,0 @@
-Role:
-You are an expert machine learning developer building a fully browser-based, GitHub Pages-deployable stock prediction demo. Everything must run client-side with TensorFlow.js. The solution must load market data from a given CSV file (like "sp500_top10_xcorr_recent3y.csv"), train a multi-output GRU model, and provide clear, interactive visualization of binary classification results for multiple stocks.
