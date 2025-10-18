@@ -219,6 +219,7 @@ class MNISTApp {
 
     /**
      * Save model to downloadable files (model.json + weights.bin)
+     * Improved version with better browser compatibility
      */
     async onSaveDownload() {
         if (!this.model) {
@@ -227,10 +228,86 @@ class MNISTApp {
         }
 
         try {
-            await this.model.save('downloads://mnist-cnn');
-            this.showStatus('Model saved successfully!');
+            this.showStatus('Saving model...');
+            
+            // Use a more specific URL scheme that works better across browsers
+            await this.model.save('downloads://mnist-model');
+            
+            this.showStatus('Model saved successfully! Check your downloads folder for mnist-model.json and mnist-model.weights.bin');
+            
+            // If automatic download doesn't work, provide manual option
+            setTimeout(() => {
+                this.showStatus('If files did not download automatically, check your browser\'s download settings or try the manual download method.');
+            }, 2000);
+            
         } catch (error) {
             this.showError(`Failed to save model: ${error.message}`);
+            console.error('Save error details:', error);
+            
+            // If automatic save fails, try manual method
+            this.showStatus('Trying manual download method...');
+            await this.saveModelManually();
+        }
+    }
+
+    /**
+     * Alternative manual save method for browsers that block automatic downloads
+     */
+    async saveModelManually() {
+        try {
+            this.showStatus('Preparing manual download...');
+            
+            // Get model architecture and weights
+            const modelJSON = this.model.toJSON();
+            const weights = await this.model.getWeights();
+            
+            // Create JSON file blob
+            const modelJsonBlob = new Blob([JSON.stringify(modelJSON)], { type: 'application/json' });
+            const modelJsonUrl = URL.createObjectURL(modelJsonBlob);
+            
+            // Create weights file blob
+            const weightData = await tf.io.encodeWeights(weights);
+            const weightsBlob = new Blob([weightData.data], { type: 'application/octet-stream' });
+            const weightsUrl = URL.createObjectURL(weightsBlob);
+            
+            // Create download links
+            const container = document.getElementById('previewContainer');
+            container.innerHTML = '<h3>Manual Download Links:</h3>';
+            
+            const jsonLink = document.createElement('a');
+            jsonLink.href = modelJsonUrl;
+            jsonLink.download = 'mnist-model.json';
+            jsonLink.textContent = 'Download model.json';
+            jsonLink.style.display = 'block';
+            jsonLink.style.margin = '10px 0';
+            jsonLink.style.padding = '10px';
+            jsonLink.style.backgroundColor = '#4CAF50';
+            jsonLink.style.color = 'white';
+            jsonLink.style.textDecoration = 'none';
+            jsonLink.style.borderRadius = '4px';
+            
+            const weightsLink = document.createElement('a');
+            weightsLink.href = weightsUrl;
+            weightsLink.download = 'mnist-model.weights.bin';
+            weightsLink.textContent = 'Download model.weights.bin';
+            weightsLink.style.display = 'block';
+            weightsLink.style.margin = '10px 0';
+            weightsLink.style.padding = '10px';
+            weightsLink.style.backgroundColor = '#2196F3';
+            weightsLink.style.color = 'white';
+            weightsLink.style.textDecoration = 'none';
+            weightsLink.style.borderRadius = '4px';
+            
+            container.appendChild(jsonLink);
+            container.appendChild(weightsLink);
+            
+            this.showStatus('Click the download links above to save model files manually');
+            
+            // Clean up weights tensors
+            weights.forEach(weight => weight.dispose());
+            
+        } catch (error) {
+            this.showError(`Manual save also failed: ${error.message}`);
         }
     }
 
