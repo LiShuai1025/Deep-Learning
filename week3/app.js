@@ -57,6 +57,7 @@ class MNISTApp {
 
     /**
      * Handle model training with validation split and visualization
+     * Optimized version to prevent browser freezing
      */
     async onTrain() {
         if (!this.trainData) {
@@ -71,11 +72,11 @@ class MNISTApp {
 
         try {
             this.isTraining = true;
-            this.showStatus('Starting training...');
+            this.showStatus('Starting training... This may take a few minutes. Please wait...');
             
-            // Split training data into train/validation sets (90%/10%)
+            // Split training data into train/validation sets (95%/5% - smaller validation set)
             const { trainXs, trainYs, valXs, valYs } = this.dataLoader.splitTrainVal(
-                this.trainData.xs, this.trainData.ys, 0.1
+                this.trainData.xs, this.trainData.ys, 0.05  // Reduced validation set
             );
 
             // Create model if it doesn't exist
@@ -84,18 +85,47 @@ class MNISTApp {
                 this.updateModelInfo();
             }
 
-            // Train model with tfjs-vis callbacks for real-time visualization
+            // Train model with optimized parameters to prevent freezing
             const startTime = Date.now();
             const history = await this.model.fit(trainXs, trainYs, {
-                epochs: 5,
-                batchSize: 128,
+                epochs: 3,                    // Reduced from 5 to 3
+                batchSize: 64,                // Reduced from 128 to 64
                 validationData: [valXs, valYs],
                 shuffle: true,
-                callbacks: tfvis.show.fitCallbacks(
-                    { name: 'Training Performance' },
-                    ['loss', 'val_loss', 'acc', 'val_acc'],
-                    { callbacks: ['onEpochEnd'] }
-                )
+                yieldEvery: 'epoch',          // Added to allow browser to respond
+                callbacks: [
+                    // Custom callback to update status and allow browser to breathe
+                    {
+                        onEpochBegin: async (epoch, logs) => {
+                            this.showStatus(`Training epoch ${epoch + 1}/3...`);
+                            // Allow browser to process UI updates
+                            await new Promise(resolve => setTimeout(resolve, 10));
+                        },
+                        onEpochEnd: async (epoch, logs) => {
+                            const accuracy = logs.acc ? (logs.acc * 100).toFixed(2) : 'N/A';
+                            const valAccuracy = logs.val_acc ? (logs.val_acc * 100).toFixed(2) : 'N/A';
+                            this.showStatus(`Epoch ${epoch + 1} completed - Accuracy: ${accuracy}%, Val Accuracy: ${valAccuracy}%`);
+                            // Allow browser to process UI updates
+                            await new Promise(resolve => setTimeout(resolve, 10));
+                        },
+                        onBatchEnd: async (batch, logs) => {
+                            // Less frequent updates to prevent UI blocking
+                            if (batch % 20 === 0) {
+                                await new Promise(resolve => setTimeout(resolve, 1));
+                            }
+                        }
+                    },
+                    // TFVis callbacks for visualization
+                    tfvis.show.fitCallbacks(
+                        { name: 'Training Performance' },
+                        ['loss', 'val_loss', 'acc', 'val_acc'],
+                        { 
+                            callbacks: ['onEpochEnd'],
+                            // Update charts less frequently to reduce load
+                            updateFreq: 'epoch'
+                        }
+                    )
+                ]
             });
 
             // Calculate and display training results
